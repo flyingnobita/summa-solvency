@@ -86,6 +86,7 @@ fn main() {
     ));
 
     let challenge = Fp::zero();
+    // store the total balances for each currency from `entries`
     let mut csv_total: Vec<BigUint> = vec![BigUint::from(0u32); N_CURRENCIES];
     for entry in &entries {
         for (i, balance) in entry.balances().iter().enumerate() {
@@ -101,7 +102,9 @@ fn main() {
         kzg_commitments.push(point.to_curve());
     }
 
+    // Calculate Grand Sum Proof for each Currency
     let poly_length = 1 << u64::from(K);
+    // total balance for each currency in field elements
     let total_balances = csv_total
         .iter()
         .map(|x| big_uint_to_fp(x) * Fp::from(poly_length).invert().unwrap())
@@ -140,6 +143,7 @@ fn main() {
         grand_sums_kzg_proof.push([kzg_proof_affine_x, kzg_proof_affine_y].concat());
     }
 
+    // convert commitment to Solidity Call Data
     let commitment = CommitmentSolidityCallData {
         range_check_snark_proof: format!("0x{}", hex::encode(zk_snark_proof)),
         grand_sums_batch_proof: format!("0x{}", hex::encode(grand_sums_kzg_proof.concat())),
@@ -157,6 +161,10 @@ fn main() {
         File::create("./bin/commitment_solidity_calldata.json").expect("Unable to create file");
     file.write_all(serialized_data.as_bytes())
         .expect("Unable to write data to file");
+
+    ///////////////////////////////////////
+    // Testing: Open User Balance, generate a proof
+    ///////////////////////////////////////
 
     // For testing, open user balances and generate a proof for a specific user index
     let user_index = 1_u16; // Example user index for proof generation

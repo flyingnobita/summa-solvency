@@ -28,6 +28,7 @@ contract Summa is Ownable {
      * @param signature The signature of the message signed by the address public key
      * @param message The message signed by the address public key
      */
+
     struct AddressOwnershipProof {
         string cexAddress;
         string chain;
@@ -52,21 +53,16 @@ contract Summa is Ownable {
 
     // zkSNARK verifier of the valid polynomial interpolation
     IVerifier private immutable polynomialInterpolationVerifier;
-    
+
     // KZG verifier of the grand sum
     IVerifier private immutable grandSumVerifier;
-    
+
     // KZG verifier of the inclusion proof
     IInclusionVerifier private immutable inclusionVerifier;
 
-    event AddressOwnershipProofSubmitted(
-        AddressOwnershipProof[] addressOwnershipProofs
-    );
+    event AddressOwnershipProofSubmitted(AddressOwnershipProof[] addressOwnershipProofs);
     event LiabilitiesCommitmentSubmitted(
-        uint256 indexed timestamp,
-        uint256[] totalBalances,
-        bytes snarkProof,
-        bytes grandSumProof
+        uint256 indexed timestamp, uint256[] totalBalances, bytes snarkProof, bytes grandSumProof
     );
 
     /**
@@ -91,44 +87,27 @@ contract Summa is Ownable {
         require(_verifyingKey != address(0), "Invalid verifying key address");
         verifyingKey = _verifyingKey;
         require(
-            cryptocurrencyNames.length == cryptocurrencyChains.length,
-            "Cryptocurrency names and chains number mismatch"
+            cryptocurrencyNames.length == cryptocurrencyChains.length, "Cryptocurrency names and chains number mismatch"
         );
-        for (uint i = 0; i < cryptocurrencyNames.length; i++) {
+        for (uint256 i = 0; i < cryptocurrencyNames.length; i++) {
             require(
-                bytes(cryptocurrencyNames[i]).length != 0 &&
-                    bytes(cryptocurrencyChains[i]).length != 0,
+                bytes(cryptocurrencyNames[i]).length != 0 && bytes(cryptocurrencyChains[i]).length != 0,
                 "Invalid cryptocurrency"
             );
         }
         require(
-            validateVKPermutationsLength(
-                _verifyingKey,
-                cryptocurrencyNames.length,
-                balanceByteRange
-            ),
+            validateVKPermutationsLength(_verifyingKey, cryptocurrencyNames.length, balanceByteRange),
             "The config parameters do not correspond to the verifying key"
         );
         require(
-            address(_polynomialInterpolationVerifier) != address(0),
-            "Invalid polynomial interpolation verifier address"
+            address(_polynomialInterpolationVerifier) != address(0), "Invalid polynomial interpolation verifier address"
         );
         polynomialInterpolationVerifier = _polynomialInterpolationVerifier;
-        require(
-            address(_grandSumVerifier) != address(0),
-            "Invalid grand sum verifier address"
-        );
+        require(address(_grandSumVerifier) != address(0), "Invalid grand sum verifier address");
         grandSumVerifier = _grandSumVerifier;
-        require(
-            address(_inclusionVerifier) != address(0),
-            "Invalid inclusion verifier address"
-        );
+        require(address(_inclusionVerifier) != address(0), "Invalid inclusion verifier address");
         inclusionVerifier = _inclusionVerifier;
-        config = SummaConfig(
-            cryptocurrencyNames,
-            cryptocurrencyChains,
-            balanceByteRange
-        );
+        config = SummaConfig(cryptocurrencyNames, cryptocurrencyChains, balanceByteRange);
     }
 
     /**
@@ -144,23 +123,19 @@ contract Summa is Ownable {
      * https://github.com/summa-dev/summa-solvency/issues/299
      */
      */
-    function validateVKPermutationsLength(
-        address vkContract,
-        uint256 numberOfCurrencies,
-        uint8 balanceByteRange
-    ) internal view returns (bool isValid) {
+    function validateVKPermutationsLength(address vkContract, uint256 numberOfCurrencies, uint8 balanceByteRange)
+        internal
+        view
+        returns (bool isValid)
+    {
         // The number of permutations is 2 + (balanceByteRange/2) * numberOfCurrencies because of the circuit structure:
         // 1 per instance column, 1 per constant column (range check) and balanceByteRange/2 per range check columns times the number of currencies
-        uint256 numPermutations = 2 +
-            (balanceByteRange / 2) *
-            numberOfCurrencies;
+        uint256 numPermutations = 2 + (balanceByteRange / 2) * numberOfCurrencies;
 
         uint256 startOffsetForPermutations = 0x2e0; // The value can be observed in the VerificationKey contract, the offset is pointing after all the parameters and the fixed column commitment
 
         // The offset after the last permutation is the start offset plus the number of permutations times 0x40 (the size of a permutation)
-        uint256 offsetAfterLastPermutation = startOffsetForPermutations +
-            numPermutations *
-            0x40;
+        uint256 offsetAfterLastPermutation = startOffsetForPermutations + numPermutations * 0x40;
 
         // extcodecopy is a gas-expensive operation per byte, so we want to minimize the number of bytes we read.
         // This hack is to read the 32 (0x20) bytes that overlap the last permutation and the empty memory location behind it.
@@ -175,7 +150,7 @@ contract Summa is Ownable {
             // Load the read bytes from 0x00 into a variable
             let readBytes := mload(0x00)
 
-            let leftHalf  := shr(128, readBytes)                                // Shift right by 128 bits to get the left half
+            let leftHalf := shr(128, readBytes) // Shift right by 128 bits to get the left half
             let rightHalf := and(readBytes, 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF) // Mask the right half
 
             // We expect the left 16 bytes to be nonzero and the right 16 bytes to be zero
@@ -184,40 +159,32 @@ contract Summa is Ownable {
         return valid;
     }
 
-    function getAddressOwnershipProof(
-        bytes32 addressHash
-    ) public view returns (AddressOwnershipProof memory) {
-        require(
-            _ownershipProofByAddress[addressHash] > 0,
-            "Address not verified"
-        );
+    function getAddressOwnershipProof(bytes32 addressHash) public view returns (AddressOwnershipProof memory) {
+        require(_ownershipProofByAddress[addressHash] > 0, "Address not verified");
         // -1 comes from the fact that 0 is reserved to distinguish the case when the proof has not yet been submitted
-        return
-            addressOwnershipProofs[_ownershipProofByAddress[addressHash] - 1];
+        return addressOwnershipProofs[_ownershipProofByAddress[addressHash] - 1];
     }
 
     /**
      * @dev Submit an optimistic proof of multiple address ownership for a CEX. The proof is subject to an off-chain verification as it's not feasible to verify the signatures of non-EVM chains in an Ethereum smart contract.
+     * // List of all address ownership proofs submitted by the CEX
+     * AddressOwnershipProof[] public addressOwnershipProofs;
+     * // Convenience mapping to check if an address has already been verified
+     * mapping(bytes32 => uint256) private _ownershipProofByAddress;
      * @param _addressOwnershipProofs The list of address ownership proofs
      */
-    function submitProofOfAddressOwnership(
-        AddressOwnershipProof[] memory _addressOwnershipProofs
-    ) public onlyOwner {
-        for (uint i = 0; i < _addressOwnershipProofs.length; i++) {
-            bytes32 addressHash = keccak256(
-                abi.encodePacked(_addressOwnershipProofs[i].cexAddress)
-            );
+    function submitProofOfAddressOwnership(AddressOwnershipProof[] memory _addressOwnershipProofs) public onlyOwner {
+        for (uint256 i = 0; i < _addressOwnershipProofs.length; i++) {
+            bytes32 addressHash = keccak256(abi.encodePacked(_addressOwnershipProofs[i].cexAddress));
             uint256 proofIndex = _ownershipProofByAddress[addressHash];
             require(proofIndex == 0, "Address already verified");
 
             addressOwnershipProofs.push(_addressOwnershipProofs[i]);
-            _ownershipProofByAddress[addressHash] = addressOwnershipProofs
-                .length;
+            _ownershipProofByAddress[addressHash] = addressOwnershipProofs.length;
             require(
-                bytes(_addressOwnershipProofs[i].cexAddress).length != 0 &&
-                    bytes(_addressOwnershipProofs[i].chain).length != 0 &&
-                    _addressOwnershipProofs[i].signature.length != 0 &&
-                    _addressOwnershipProofs[i].message.length != 0,
+                bytes(_addressOwnershipProofs[i].cexAddress).length != 0
+                    && bytes(_addressOwnershipProofs[i].chain).length != 0
+                    && _addressOwnershipProofs[i].signature.length != 0 && _addressOwnershipProofs[i].message.length != 0,
                 "Invalid proof of address ownership"
             );
         }
@@ -240,22 +207,20 @@ contract Summa is Ownable {
     ) public onlyOwner {
         // Check input length
         require(totalBalances.length > 0, "Invalid total balances length");
-        require(grandSumProof.length == (totalBalances.length * 0x40), "Invalid grand sum proof length");
+        require(grandSumProof.length == (totalBalances.length * 0x40), "Invalid grand sum proof length"); // grandSumProof must be 64 bytes per totalBalance
         require(snarkProof.length > grandSumProof.length, "Invalid snark proof length");
-        
-        uint[] memory args = new uint[](1);
+
+        uint256[] memory args = new uint256[](1);
 
         // This is the instance value for checking zero value inside circuit
-        args[0] = 0; 
-        require(
-            polynomialInterpolationVerifier.verifyProof(verifyingKey, snarkProof, args),
-            "Invalid snark proof"
-        );
+        args[0] = 0;
+        require(polynomialInterpolationVerifier.verifyProof(verifyingKey, snarkProof, args), "Invalid snark proof");
         require(
             totalBalances.length == config.cryptocurrencyNames.length,
             "Liability commitments and cryptocurrencies number mismatch"
         );
 
+        // take the first 64 bytes of the snark proof + length of grand sum proof
         bytes calldata slicedSnarkProof = snarkProof[0:64 + grandSumProof.length];
         bytes memory combinedProofs = abi.encodePacked(grandSumProof, slicedSnarkProof[64:]);
 
@@ -273,12 +238,12 @@ contract Summa is Ownable {
         uint256[] memory values
     ) public view returns (bool) {
         require(challenges.length == 4, "Invalid challenges length");
-        
+
         // Excluding `usename` in the values
         require((values.length - 1) == config.cryptocurrencyNames.length, "Values length mismatch with config");
 
         bytes memory snarkProof = commitments[timestamp];
-    
+
         bytes memory combinedProofs = new bytes(snarkProof.length + inclusionProof.length);
         for (uint256 i = 0; i < inclusionProof.length; i++) {
             combinedProofs[i] = inclusionProof[i];

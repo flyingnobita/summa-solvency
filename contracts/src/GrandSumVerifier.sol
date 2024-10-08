@@ -4,32 +4,26 @@ pragma solidity ^0.8.0;
 
 contract GrandSumVerifier {
     // Calldata positions for proofs
-    uint256 internal constant       PROOF_LEN_CPTR = 0x64;
-    uint256 internal constant           PROOF_CPTR = 0x84;
+    uint256 internal constant PROOF_LEN_CPTR = 0x64;
+    uint256 internal constant PROOF_CPTR = 0x84;
 
     // Memory positions for the verifying key.
     // The memory location starts at 0x200 due to the maximum operation on the ec_pairing function being 0x180, marking the maximum memory location used
-    uint256 internal constant             N_INV_MPTR = 0x220;
-    uint256 internal constant             LHS_X_MPTR = 0x240;
-    uint256 internal constant             LHS_Y_MPTR = 0x260;
-    uint256 internal constant              G1_X_MPTR = 0x280;
-    uint256 internal constant              G1_Y_MPTR = 0x2a0;
-    uint256 internal constant            G2_X_1_MPTR = 0x2c0;
-    uint256 internal constant            G2_X_2_MPTR = 0x2e0;
-    uint256 internal constant            G2_Y_1_MPTR = 0x300;
-    uint256 internal constant            G2_Y_2_MPTR = 0x320;
-    uint256 internal constant      NEG_S_G2_X_1_MPTR = 0x340;
-    uint256 internal constant      NEG_S_G2_X_2_MPTR = 0x360;
-    uint256 internal constant      NEG_S_G2_Y_1_MPTR = 0x380;
-    uint256 internal constant      NEG_S_G2_Y_2_MPTR = 0x3a0;
+    uint256 internal constant N_INV_MPTR = 0x220;
+    uint256 internal constant LHS_X_MPTR = 0x240;
+    uint256 internal constant LHS_Y_MPTR = 0x260;
+    uint256 internal constant G1_X_MPTR = 0x280;
+    uint256 internal constant G1_Y_MPTR = 0x2a0;
+    uint256 internal constant G2_X_1_MPTR = 0x2c0;
+    uint256 internal constant G2_X_2_MPTR = 0x2e0;
+    uint256 internal constant G2_Y_1_MPTR = 0x300;
+    uint256 internal constant G2_Y_2_MPTR = 0x320;
+    uint256 internal constant NEG_S_G2_X_1_MPTR = 0x340;
+    uint256 internal constant NEG_S_G2_X_2_MPTR = 0x360;
+    uint256 internal constant NEG_S_G2_Y_1_MPTR = 0x380;
+    uint256 internal constant NEG_S_G2_Y_2_MPTR = 0x3a0;
 
-
-
-    function verifyProof(
-        address vk,
-        bytes calldata proof,
-        uint256[] calldata values
-    ) public returns (bool) {
+    function verifyProof(address vk, bytes calldata proof, uint256[] calldata values) public returns (bool) {
         assembly {
             // Check if EC point (x, y) is on the curve.
             // if the point is on the affine plane, it then returns updated (success).
@@ -89,17 +83,37 @@ contract GrandSumVerifier {
 
             // The proof length should be divisible by `0x80` bytes, equivalent to four words.
             //
-            // The proof is structured as follows: 
-            //  2W * n: Commitment points in the SNARK proof.
-            //  2W * n: Points in the opening proof.
-            //  1W    : Length of evaluation values. 
-            //  1W * n: Evaluation values.
+            // The proof is structured as follows:
+            //  ------------- PROOF -----------------------------------------------
+            //  2W * n: Commitment points in the SNARK proof.   64 bytes * n = 0x40 * n
+            //  2W * n: Points in the opening proof.            64 bytes * n = 0x40 * n
+            //  4W * n: TOTAL Proof data.                       128 bytes * n = 0x80 * n
+            //  ------------- EVALUATION -----------------------------------------------
+            //  1W    : Length of evaluation values.            32 bytes     = 0x20
+            //  1W * n: Evaluation values.                      32 bytes * n = 0x20 * n
+            //  1W * n + 1W: TOTAL EVAL
+            //  ------------- TOTAL -----------------------------------------------
+            //  5W * n + 1W: TOTAL PROOF + TOTAL EVAL           160 bytes * n + 32 bytes = 0xA0 * n + 0x20
             //
+            // Proof strcuture should be as follows (deduced from code):
+            // 0x40 Commitment points in the SNARK proof    - Point 1
+            // 0x40 Points in the opening proof             - Point 1
+            // 0x40 Commitment points in the SNARK proof    - Point 2
+            // 0x40 Points in the opening proof             - Point 2
+            // ...
+            // 0x20 EMPTY
+            // 0x20 Evaluation Values Length
+            // 0x20 Evaluation values - Point 1
+            // 0x20 Evaluation values - Point 2
+            // ...
+
             // Where W is refers to a Word, which is 32 bytes.
             // And 'n' denotes the number of commitments as well as the number of evaluation values.
+            // proof_length = 4W * n = 0x80 * n
             let proof_length := calldataload(PROOF_LEN_CPTR)
 
             // Ensure the proof length is divisible by `0x80`, accommodating the structured data layout.
+            // divisible by 128 bytes
             success := and(success, eq(0, mod(proof_length, 0x80)))
             if iszero(success) {
                 mstore(0, "Invalid proof length")
@@ -107,9 +121,13 @@ contract GrandSumVerifier {
             }
 
             // Load the length of evaluation values, positioned after the proof data.
+            // The length of evaluation values is located at the position `PROOF_LEN_CPTR + proof_length + 0x20`.
+            // evaluation_values_length_pos = PROOF_LEN_CPTR + proof_length + 0x20
+            // evaluation_values_length_pos = PROOF_LEN_CPTR + 0x80 * n + 0x20
             let evaluation_values_length_pos := add(add(PROOF_LEN_CPTR, proof_length), 0x20)
+            // evaluation_values_length = 1W * n
             let evaluation_values_length := calldataload(evaluation_values_length_pos)
-            
+
             // The proof length should match 4 times the length of the evaluation values.
             success := and(success, eq(4, div(proof_length, mul(evaluation_values_length, 0x20))))
             if iszero(success) {
@@ -118,8 +136,21 @@ contract GrandSumVerifier {
             }
 
             for { let i := 0 } lt(i, evaluation_values_length) { i := add(i, 1) } {
+                // i = 0, shift_pos = 0x00
+                // i = 1, shift_pos = 0x20
+                // i = 2, shift_pos = 0x40
                 let shift_pos := mul(i, 0x20)
+                // i = 0, double_shift_pos = 0x00
+                // i = 1, double_shift_pos = 0x40
+                // i = 2, double_shift_pos = 0x80
                 let double_shift_pos := mul(shift_pos, 2) // for next point
+                // i = 1:
+                //      calldataload(add(evaluation_values_length_pos, add(0x20, 0x20)))
+                //      calldataload(add(evaluation_values_length_pos, 0x40))
+                //      calldataload(add(0x64 + 0x80 * n + 0x20, 0x40))
+                //      calldataload(add(0x64 + 0x80 + 0x20, 0x40))
+                //      calldataload(0x144) = calldataload(324)
+                //      get 32 bytes from calldata
                 let total_balance := calldataload(add(evaluation_values_length_pos, add(shift_pos, 0x20)))
 
                 // The `z` is evaluated with 'total_balance' multiply by `N_INV`
@@ -131,14 +162,21 @@ contract GrandSumVerifier {
                 mstore(0x80, mload(G1_X_MPTR))
                 mstore(0xa0, mload(G1_Y_MPTR))
                 success := and(success, ec_mul_tmp(success, minus_z))
-                
+
                 // Performaing `c_g_to_minus_z := c + g_to_minus_z`
                 // `c` is equivalent to `commitment` as input on the `open_grand_sums` function.
-                // the values of 'g_to_minus_z` is already located at 0x80 and 0xa0 in the previous step 
+                // the values of 'g_to_minus_z` is already located at 0x80 and 0xa0 in the previous step
+
+                // PROOF_LEN_CPTR = 0x64;
+                // PROOF_CPTR = 0x84
+                // i = 0: add(add(PROOF_CPTR, div(0x80 * n, 2)), 0x00)
+                //      = add(PROOF_CPTR, 0x40 * n)
+                // i = 1: add(add(PROOF_CPTR, div(0x80 * n, 2)), 0x40)
+                //      = add(add(PROOF_CPTR, 0x40 * n), 0x40)
                 let commitment_proof_pos := add(add(PROOF_CPTR, div(proof_length, 2)), double_shift_pos)
                 success := check_ec_point(success, commitment_proof_pos, q)
 
-                let lhs_x := calldataload(commitment_proof_pos)            // C_X
+                let lhs_x := calldataload(commitment_proof_pos) // C_X
                 let lhs_y := calldataload(add(commitment_proof_pos, 0x20)) // C_Y
                 success := ec_add_tmp(success, lhs_x, lhs_y)
 

@@ -549,8 +549,145 @@ mod test {
 
         parse_csv_to_entries::<&str, N_CURRENCIES>(path, &mut entries, &mut cryptos).unwrap();
 
+        // println!("entries: {:?}", entries.len());
+        // println!("entries: {:#?}", entries);
+
         let circuit = UnivariateGrandSum::<N_USERS, N_CURRENCIES, CONFIG>::init(entries.to_vec());
 
         (entries, circuit, pk, vk, params)
+    }
+
+    #[test]
+    fn test_hiding_property() {
+        const N_USERS: usize = 6; // override module instance
+
+        let path = "../csv/entry_2.csv";
+
+        let (entries, circuit, pk, vk, params) =
+            set_up::<K, N_USERS, N_CURRENCIES, UnivariateGrandSumConfig<N_CURRENCIES, N_USERS>>(
+                path,
+            );
+
+        // Calculate total for all entry columns
+        let mut csv_total: Vec<BigUint> = vec![BigUint::from(0u32); N_CURRENCIES];
+        for entry in &entries {
+            for (i, balance) in entry.balances().iter().enumerate() {
+                csv_total[i] += balance;
+            }
+        }
+
+        // 1. Proving phase
+        // The Custodian generates the ZK-SNARK Halo2 proof that commits to the user entry values in advice polynomials
+        // and also range-checks the user balance values
+        let (zk_snark_proof, advice_polys, omega) =
+            full_prover(&params, &pk, circuit.clone(), &[vec![Fp::zero()]]);
+
+        // Both the Custodian and the Verifier know what column range are the balance columns
+        // (The first column is the user IDs)
+        let balance_column_range = 1..N_CURRENCIES + 1;
+
+        // The Custodian communicates the polynomial length to the Verifier
+        let poly_length = 1 << u64::from(K);
+
+        // The Custodian makes a batch opening proof of all user balance polynomials at x = 0 for the Verifier
+        let grand_sums_batch_proof = open_grand_sums(
+            &advice_polys.advice_polys,
+            &advice_polys.advice_blinds,
+            &params,
+            balance_column_range,
+            csv_total
+                .iter()
+                // The inversion represents the division by the polynomial length (grand total is equal to the constant coefficient times the number of points)
+                .map(|x| big_uint_to_fp(&(x)) * Fp::from(poly_length).invert().unwrap())
+                .collect::<Vec<Fp>>()
+                .as_slice(),
+        );
+
+        // The Custodian creates a KZG batch proof of the 4th user ID & balances inclusion
+        let user_index = 2_u16;
+
+        let column_range = 0..N_CURRENCIES + 1;
+        let openings_batch_proof = open_user_points(
+            &advice_polys.advice_polys,
+            &advice_polys.advice_blinds,
+            &params,
+            column_range,
+            omega,
+            user_index,
+            &entries
+                .get(user_index as usize)
+                .map(|entry| {
+                    std::iter::once(big_uint_to_fp(&(entry.username_as_big_uint())))
+                        .chain(entry.balances().iter().map(|x| big_uint_to_fp(x)))
+                        .collect::<Vec<Fp>>()
+                })
+                .unwrap(),
+        );
+
+        // 2. Verification phase
+        // The Verifier verifies the ZK proof
+        assert!(full_verifier(
+            &params,
+            &vk,
+            &zk_snark_proof,
+            &[vec![Fp::zero()]]
+        ));
+
+        // The Verifier is able to independently extract the omega from the verification key
+        let omega = pk.get_vk().get_domain().get_omega();
+
+        // The Custodian communicates the polynomial length to the Verifier
+        let poly_length = 1 << u64::from(K);
+
+        // Both the Custodian and the Verifier know what column range are the balance columns
+        let balance_column_range = 1..N_CURRENCIES + 1;
+
+        // The Custodian communicates the KZG batch opening transcript to the Verifier
+        // The Verifier verifies the KZG batch opening and calculates the grand sums
+        let (verified, grand_sum) = verify_grand_sum_openings::<N_CURRENCIES>(
+            &params,
+            &zk_snark_proof,
+            &grand_sums_batch_proof,
+            poly_length,
+            balance_column_range,
+        );
+
+        assert!(verified);
+        for i in 0..N_CURRENCIES {
+            assert_eq!(csv_total[i], grand_sum[i]);
+        }
+
+        let column_range = 0..N_CURRENCIES + 1;
+        // The Verifier verifies the inclusion of the 4th user entry
+        let (inclusion_verified, id_and_balance_values) = verify_user_inclusion(
+            &params,
+            &zk_snark_proof,
+            &openings_batch_proof,
+            column_range,
+            omega,
+            user_index,
+        );
+
+        assert!(inclusion_verified);
+        let fourth_user_csv_entry = entries.get(user_index as usize).unwrap();
+        println!("fourth_user_csv_entry: {:?}", fourth_user_csv_entry);
+        println!(
+            "fourth_user_csv_entry.username_as_big_uint(): {:?}",
+            fourth_user_csv_entry.username_as_big_uint()
+        );
+        println!("id_and_balance_values: {:?}", id_and_balance_values);
+        for i in 0..N_CURRENCIES + 1 {
+            if i == 0 {
+                assert_eq!(
+                    *fourth_user_csv_entry.username_as_big_uint(),
+                    id_and_balance_values[i]
+                );
+            } else {
+                assert_eq!(
+                    *fourth_user_csv_entry.balances().get(i - 1).unwrap(),
+                    id_and_balance_values[i]
+                );
+            }
+        }
     }
 }

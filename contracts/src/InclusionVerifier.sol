@@ -3,30 +3,29 @@ pragma solidity ^0.8.0;
 
 contract InclusionVerifier {
     // Calldata positions for proofs
-    uint256 internal constant       PROOF_LEN_CPTR = 0x84;
-    uint256 internal constant           PROOF_CPTR = 0xa4;
+    uint256 internal constant PROOF_LEN_CPTR = 0x84;
+    uint256 internal constant PROOF_CPTR = 0xa4;
 
     // Memory positions for the verifying key.
     // The memory location starts at 0x200 due to the maximum operation on the ec_pairing function being 0x180.
-    uint256 internal constant             LHS_X_MPTR = 0x200;
-    uint256 internal constant             LHS_Y_MPTR = 0x220;
-    uint256 internal constant              G1_X_MPTR = 0x240;
-    uint256 internal constant              G1_Y_MPTR = 0x260;
-    uint256 internal constant            G2_X_1_MPTR = 0x280;
-    uint256 internal constant            G2_X_2_MPTR = 0x2a0;
-    uint256 internal constant            G2_Y_1_MPTR = 0x2c0;
-    uint256 internal constant            G2_Y_2_MPTR = 0x2e0;
-    uint256 internal constant      NEG_S_G2_X_1_MPTR = 0x300;
-    uint256 internal constant      NEG_S_G2_X_2_MPTR = 0x320;
-    uint256 internal constant      NEG_S_G2_Y_1_MPTR = 0x340;
-    uint256 internal constant      NEG_S_G2_Y_2_MPTR = 0x360;
+    uint256 internal constant LHS_X_MPTR = 0x200;
+    uint256 internal constant LHS_Y_MPTR = 0x220;
+    uint256 internal constant G1_X_MPTR = 0x240;
+    uint256 internal constant G1_Y_MPTR = 0x260;
+    uint256 internal constant G2_X_1_MPTR = 0x280;
+    uint256 internal constant G2_X_2_MPTR = 0x2a0;
+    uint256 internal constant G2_Y_1_MPTR = 0x2c0;
+    uint256 internal constant G2_Y_2_MPTR = 0x2e0;
+    uint256 internal constant NEG_S_G2_X_1_MPTR = 0x300;
+    uint256 internal constant NEG_S_G2_X_2_MPTR = 0x320;
+    uint256 internal constant NEG_S_G2_Y_1_MPTR = 0x340;
+    uint256 internal constant NEG_S_G2_Y_2_MPTR = 0x360;
 
-    function verifyProof(
-        address vk,
-        bytes calldata proofs,
-        uint256[] calldata challenges,
-        uint256[] calldata values
-    ) public view returns (bool) {
+    function verifyProof(address vk, bytes calldata proofs, uint256[] calldata challenges, uint256[] calldata values)
+        public
+        view
+        returns (bool)
+    {
         assembly {
             // Check EC point (x, y) is on the curve.
             // the point is on affine plane, and then return success.
@@ -52,7 +51,7 @@ contract InclusionVerifier {
                 mstore(0xc0, scalar)
                 ret := and(success, staticcall(gas(), 0x07, 0x80, 0x60, 0x80, 0x40))
             }
-            
+
             // Perform pairing check.
             function ec_pairing(success, lhs_x, lhs_y, rhs_x, rhs_y) -> ret {
                 mstore(0x00, lhs_x)
@@ -82,26 +81,39 @@ contract InclusionVerifier {
             extcodecopy(vk, G1_X_MPTR, 0x160, 0xc0)
 
             // The proof length should be divisible by `0x80` bytes, equivalent to four words.
-            // The proof is structured as follows: 
+            // The proof is structured as follows:
             // 2W * n: Commitment points in the SNARK proof.
             // 2W * n: Points in the opening proof.
             // where W is referred to as a Word, which is 32 bytes.
             // and `n` denotes the number of commitments as well as the number of evaluation values.
+
+            // Proof strcuture should be as follows (deduced from code):
+            // 0x40 Commitment points in the SNARK proof    - Point 1
+            // 0x40 Points in the opening proof             - Point 1
+            // 0x40 Commitment points in the SNARK proof    - Point 2
+            // 0x40 Points in the opening proof             - Point 2
+            // ...
+            // 0x20 EMPTY
+            // 0x20 Challenge Length = 4
+            // 0x20 NEG_S_G2_X_1_MPTR
+            // 0x20 NEG_S_G2_X_2_MPTR
+            // 0x20 NEG_S_G2_Y_1_MPTR
+            // 0x20 NEG_S_G2_Y_2_MPTR
+            // 0x20 Evaluation Values Length
+            // 0x20 Evaluation values - Point 1
+            // 0x20 Evaluation values - Point 2
+
             let proof_length := calldataload(PROOF_LEN_CPTR)
-            
+
             // Ensure the proof length is divisible by `0x80`, accommodating the structured data layout.
             success := and(success, eq(0, mod(proof_length, 0x80)))
-            if iszero(success) {
-                revert(0, 0)
-            }
+            if iszero(success) { revert(0, 0) }
 
             // Load the NEG_S_G2 point with the calculated point
             let challenges_length_pos := add(add(PROOF_LEN_CPTR, proof_length), 0x20)
             let challenges_length := calldataload(challenges_length_pos)
             success := and(success, eq(challenges_length, 4))
-            if iszero(success) {
-                revert(0, 0)
-            }
+            if iszero(success) { revert(0, 0) }
 
             mstore(NEG_S_G2_X_1_MPTR, calldataload(add(challenges_length_pos, 0x20)))
             mstore(NEG_S_G2_X_2_MPTR, calldataload(add(challenges_length_pos, 0x40)))
@@ -109,19 +121,30 @@ contract InclusionVerifier {
             mstore(NEG_S_G2_Y_2_MPTR, calldataload(add(challenges_length_pos, 0x80)))
 
             // Load the length of evaluation values, positioned after the proof data.
+            // evaluation_values_length_pos = PROOF_LEN_CPTR + proof_length + 0x20
+            // evaluation_values_length_pos = PROOF_LEN_CPTR + 0x80 * n + 0x20
             let evaluation_values_length_pos := add(add(challenges_length_pos, mul(challenges_length, 0x20)), 0x20)
             let evaluation_values_length := calldataload(evaluation_values_length_pos)
-        
+
             // The proof length should match 4 times the length of the evaluation values.
             success := and(success, eq(4, div(proof_length, mul(evaluation_values_length, 0x20))))
-            if iszero(success) {
-                revert(0, 0)
-            }
+            if iszero(success) { revert(0, 0) }
 
             for { let i := 0 } lt(i, evaluation_values_length) { i := add(i, 1) } {
+                // i = 0, shift_pos = 0x00
+                // i = 1, shift_pos = 0x20
+                // i = 2, shift_pos = 0x40
                 let shift_pos := mul(i, 0x20)
+                // i = 0, double_shift_pos = 0x00
+                // i = 1, double_shift_pos = 0x40
+                // i = 2, double_shift_pos = 0x80
                 let double_shift_pos := mul(i, 0x40) // for next point
-
+                // i = 0:
+                //      calldataload(add(evaluation_values_length_pos, add(0, 0x20)))
+                //      calldataload(add(evaluation_values_length_pos, 0x20))
+                // i = 1:
+                //      calldataload(add(evaluation_values_length_pos, add(0x20, 0x20)))
+                //      calldataload(add(evaluation_values_length_pos, 0x40))
                 let value := calldataload(add(evaluation_values_length_pos, add(shift_pos, 0x20)))
                 let minus_z := sub(r, value)
 
@@ -131,20 +154,18 @@ contract InclusionVerifier {
                 mstore(0xc0, minus_z)
                 success := and(success, ec_mul_tmp(success, minus_z))
 
-                // Performaing like `c_g_to_minus_z = c + g_to_minus_z` in `verify_kzg_proof` function that is located in `amortized_kzg.rs`. 
-                // 
+                // Performaing like `c_g_to_minus_z = c + g_to_minus_z` in `verify_kzg_proof` function that is located in `amortized_kzg.rs`.
+                //
                 // The `c` refers to `commitment` as input likes in the `open_grand_sums` function.
-                // The values of 'g_to_minus_z` is already located at 0x80 and 0xa0 in the previous step 
+                // The values of 'g_to_minus_z` is already located at 0x80 and 0xa0 in the previous step
                 let commitment_proof_pos := add(add(PROOF_CPTR, div(proof_length, 2)), double_shift_pos)
                 success := check_ec_point(success, commitment_proof_pos, q)
 
-                let lhs_x := calldataload(commitment_proof_pos)            // C_X
+                let lhs_x := calldataload(commitment_proof_pos) // C_X
                 let lhs_y := calldataload(add(commitment_proof_pos, 0x20)) // C_Y
                 success := ec_add_tmp(success, lhs_x, lhs_y)
-                if iszero(success) {
-                    revert(0, 0)
-                }
-                
+                if iszero(success) { revert(0, 0) }
+
                 mstore(LHS_X_MPTR, mload(0x80))
                 mstore(LHS_Y_MPTR, mload(0xa0))
 
@@ -162,5 +183,4 @@ contract InclusionVerifier {
             return(0x00, 0x20)
         }
     }
-
 }

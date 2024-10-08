@@ -24,13 +24,13 @@ use summa_solvency::{
     },
 };
 
-const K: u32 = 9;
+const K: u32 = 18;
 const N_CURRENCIES: usize = 2;
-const N_USERS_TOTAL: usize = 64;
+const N_USERS_TOTAL: usize = 16;
 const N_USERS_CHUNK: usize = N_USERS_TOTAL / 2;
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let path = "../csv/entry_64.csv";
+    let path = "../csv/entry_16.csv";
 
     let mut entries: Vec<Entry<N_CURRENCIES>> = vec![Entry::init_empty(); N_USERS_TOTAL];
     let mut cryptos = vec![Cryptocurrency::init_empty(); N_CURRENCIES];
